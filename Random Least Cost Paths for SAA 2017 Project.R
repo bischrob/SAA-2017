@@ -95,7 +95,7 @@ writeOGR(starting.point, dsn = ".", layer = shp1.name,
                    driver = "ESRI Shapefile", overwrite = T)
 
 # Get raster using FedData package; res is "1" for 1 arcsec or "13" for
-# 1/3 arcsec, although using 13 may cause an error (reason unknown)
+# 1/3 arcsec
 NED <- get_ned(template = starting.point, label = proj.name, res = "1")
 NED <- projectRaster(NED, crs=crs1) # raster must be projected for
                                      # this script
