@@ -1,7 +1,7 @@
 #################################################################################
 ## Name:Random Least Cost Paths
 ## Author: Robert J. Bischoff
-## Date: last updated - 3/27/2017
+## Date: last updated - 3/26/2019
 ## Purpose: This script requires a starting point and will generate least cost
 ## paths (LCP) from the starting point to randomly generated points within a 
 ## designated extent. The purpose is to determine whether LCP is beneficial for 
@@ -12,46 +12,31 @@
 ## euclidean distance if flat, and the time to walk the LCP if flat.
 ## Licence: MIT
 ##    (https://opensource.org/licenses/MIT)
-## Packages Used: "raster", "gdistance", "rgdal", "rgeos", "FedData"
 #################################################################################
+
+# load packages using pacman function
+# install.packages('pacman') # uncomment if pacman is not installed
+pacman::p_load(compiler,tidyverse,raster,gdistance,rgdal,rgeos,FedData,here,sf)
 
 # Record run time
 ptm <- proc.time()
 
 # Load compiler to speed up code.
-require(compiler)
 enableJIT(3)
-
-# Create a variable storing packages used, installs the package if missing, and
-# loads packages.
-my.packages <- c("raster", "gdistance", "rgdal",
-                 "rgeos", "FedData")
-usePackage <- function(p) 
-{
-  if (!is.element(p, installed.packages()[,1]))
-    install.packages(p, dep = TRUE)
-  require(p, character.only = TRUE)
-}  
-lapply(my.packages, usePackage)
 
 # The section includes all variables that should be updated before running
 # this script.
 
-wd <- "E:/SAA 2017 Poster/Random Points" # this is the directory where files will
-                                        # be stored/accessed. Note "/" is used
-                                        # and not "\" as is typical for windows
-proj.name <- "Random Points"        # name of project - used for naming the NED
-                                # the proj.name must be changed for every new
-                                # point or it will cause an error
-                               # download folder
-shp1.name <- "StartingPoint"   # change the name of the shapefile for the 
-                               # starting point
-shp2.name <- "RandomPoints"    # change the name of the shapefile with the
-                               # randomly generated points
-shp3.name <- "LCPs"            # change the name of the LCPs
-NED.name <- "Random Points"         # name of the saved NED
-starting.pt <-  c(-109.2071, 37.4262) # coordinates for the starting point
-                                        # in long/lat WGS84.
+dir <- here("Random Least Cost Paths for SAA 2017 Project.R")
+  
+projName <- "Random Points"    # name of project
+ptStart <- "StartingPoint"     # starting point
+ptsRandom <- "RandomPoints"    # change the name of the shapefile with the
+                              # randomly generated points
+LCP <- "LCPs"                 # change the name of the LCPs
+NED <- "Random Points"         # name of the saved NED
+ptStartCoords <-  c(-112.065235, 33.332575) # coordinates for the starting point
+
 # This code will determine the UTM zone based on the longitudinal coordinate
 # and will assist in determining the appropriate coordinate reference system
 # code from - http://stackoverflow.com/questions/9186496/determining-utm-zone-to-convert-from-longitude-latitude
@@ -59,16 +44,15 @@ long2UTM <- function(long) {  # do not modify this function
   (floor((long + 180)/6) %% 60) + 1
   
 }
-long2UTM(starting.pt[1]) # this returns the UTM zone
-crs1 <- crs("+init=epsg:26914") # go to spatialreference.org to determine the
-# epsg for the UTM zone the point is located in
-area.size <- 10000    # this is the size of the area in M to use in this script.
-dem.aggregate <- 6    # this number determines the cell size of the raster
+long2UTM(ptStartCoords[1]) # this returns the UTM zone
+crs1 <- 26912
+areaSize <- 5000    # this is the size of the area in M to use in this script.
+DEMAggregateN <- 6    # this number determines the cell size of the raster
                       # a value of 1 will keep the original 30 M DEM, a value
                       # of 2 will result in a 60 M cell, etc. - it is 
                       # best to increase this number for testing the script
                       # and on computers not designed for high power computing
-random.points <- 10   # this determines the number of random points to generate
+ptsRandomN <- 10   # this determines the number of random points to generate
                       # LCPs to.
 
 
@@ -78,37 +62,42 @@ random.points <- 10   # this determines the number of random points to generate
 # To use saved files, place a "#" in front of the unneeded code and remove the
 # "#" in front of the code to load files.
 
-# Set working directory
-setwd(wd)
-
 # use longitude / latitude coordinates to get raster
-starting.point <- SpatialPoints(matrix(starting.pt, ncol = 2),
-                                CRS("+init=epsg:4326"))
-starting.point <- spTransform(starting.point, crs1)
-starting.point <- SpatialPointsDataFrame(matrix(starting.point@coords[1:2],
-                       ncol = 2), data.frame("ID" = 1), proj4string = crs1)
-starting.point@bbox[1] <- starting.point@bbox[1] - area.size  
-starting.point@bbox[2] <- starting.point@bbox[2] - area.size
-starting.point@bbox[3] <- starting.point@bbox[3] + area.size
-starting.point@bbox[4] <- starting.point@bbox[4] + area.size
-writeOGR(starting.point, dsn = ".", layer = shp1.name,
-                   driver = "ESRI Shapefile", overwrite = T)
+starting.point <- st_sf(data = tibble(id = 1),
+                          geometry = 
+                          st_sfc(st_point(ptStartCoords), crs = 4326))
+starting.point <- st_transform(starting.point,crs1)
+xMinus <- st_coordinates(starting.point)[,1] - areaSize  
+xPlus <- st_coordinates(starting.point)[,1] + areaSize
+yMinus <- st_coordinates(starting.point)[,2] - areaSize
+yPlus <- st_coordinates(starting.point)[,2] + areaSize
+coords <- matrix(c(xMinus,yMinus,
+                   xMinus,yPlus,
+                   xPlus,yPlus,
+                   xPlus,yMinus,
+                   xMinus,yMinus), ncol = 2, byrow = T)
+poly <- st_sf(st_sfc(st_polygon(list(coords))),
+              crs = crs1)
+polySP <- as_Spatial(poly)
+
+# writeOGR(starting.point, dsn = ".", layer = ptStart,
+                   # driver = "ESRI Shapefile", overwrite = T)
 
 # Get raster using FedData package; res is "1" for 1 arcsec or "13" for
 # 1/3 arcsec
-NED <- get_ned(template = starting.point, label = proj.name, res = "1")
-NED <- projectRaster(NED, crs=crs1) # raster must be projected for
+NED <- get_ned(template = polySP, label = projName, res = "1")
+NED <- projectRaster(NED, crs=polySP@proj4string) # raster must be projected for
                                      # this script
   
 # Save projected raster
-writeRaster(NED, filename=NED.name, format="GTiff", overwrite=TRUE)
+# writeRaster(NED, filename=NED.name, format="GTiff", overwrite=TRUE)
 
 # Or load data from file 
 # NED <- raster(paste0(NED.name,".tif"))
 
 # Generate LCP
 # Downsize raster
-NED <- aggregate(NED, fact = dem.aggregate, fun = mean)
+NED <- aggregate(NED, fact = DEMAggregateN, fun = mean)
 
 # Create function to generate elevation difference.
 altDiff <- function(x){x[2] - x[1]}
@@ -126,23 +115,8 @@ speed[adj] <- (6000 * exp(-3.5 * abs(slope[adj] + 0.05))) # 6000 is the value
                                   # required for a walking speed of 5k/h on
                                   # flat terrain
                    
-# Remove unnecessary variables
-rm(slope)
-rm(hd)
-rm(adj)
-
 # The following corrects for diagonal distances between cells
 Conductance <- geoCorrection(speed)
-
-# Remove variable
-rm(speed)
-
-# save Conductance layer for future use. 
-saveRDS(Conductance, "Conductance.rds") # change name if more than one
-                                        # conductance layer will be used
-
-# Load previously generated conductance
-# Conductance <- readRDS('Conductances.rds') # change name if necessary
 
 # Generate random points
 # Set the minimum and maximum values for the locations and ensures the values
@@ -153,20 +127,20 @@ y.min <- NED@extent@ymin + 1000
 y.max <- NED@extent@ymax - 1000
  
 # Generate random x and y coordinates and pair them in a matrix.
-x <- sample(x.min:x.max, random.points, replace = T)
-y <- sample(y.min:y.max, random.points, replace = T)
+x <- sample(x.min:x.max, ptsRandomN, replace = T)
+y <- sample(y.min:y.max, ptsRandomN, replace = T)
 xy.df <- data.frame(cbind(1:length(x),x,y))
 xy.spdf <- SpatialPointsDataFrame(xy.df[,2:3], xy.df, proj4string = NED@crs)
-writeOGR(xy.spdf, dsn = ".", layer = shp2.name, driver = "ESRI Shapefile",
-         overwrite = T)
+# writeOGR(xy.spdf, dsn = ".", layer = ptsRandom, driver = "ESRI Shapefile",
+         # overwrite = T)
 
 # Or use points loaded from a shapefile
-# xy.spdf <- readOGR(".", shp2.name)
+# xy.spdf <- readOGR(".", ptsRandom)
 
 # Determine Least Cost path and calculate walking time and distances
 
 # Load starting point from shapefile.
-# starting.point <- readOGR('.', shp1.name)
+# starting.point <- readOGR('.', ptStart)
 ending.point <- xy.spdf
 # create dataframe for distance information
 paths.df <- data.frame("ID" = 1:nrow(ending.point@data),
@@ -234,10 +208,10 @@ points(ending.point, col = "purple", pch = 19)
 lines(paths)
 
 # Create shapefile
-writeOGR(paths, dsn = ".", layer = shp3.name,
-         driver = "ESRI Shapefile", overwrite = T)
+# writeOGR(paths, dsn = ".", layer = LCP,
+#          driver = "ESRI Shapefile", overwrite = T)
 # Create csv containing the attributes
-write.csv(paths.df,paste0(shp3.name,".csv"), row.names = F)
+write.csv(paths.df,paste0(LCP,".csv"), row.names = F)
 
 # Print run time
 proc.time() - ptm
